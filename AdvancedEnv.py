@@ -1,95 +1,70 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Tue May 10, 2022
+class AdvancedEnv(StocksEnv):
 
-@author: Forest Shi
-"""
-import numpy as np
+  def __init__(self, df, window_size, frame_bound):
+      super().__init__(df, window_size, frame_bound)
+      self.trade_fee_bid_percent = 0  # unit
+      self.trade_fee_ask_percent = 0  # unit
 
-from .trading_env import TradingEnv, Actions, Positions
+  def reset(self):
+    obs = super().reset()
+    self._total_reward = 1
+    return obs
 
+  def _update_mdd():
+    pass
 
-class AdvancedEnv2(TradingEnv):
+  def update_sharpe():
+    pass
 
-    def __init__(self, df, window_size, frame_bound):
-        assert len(frame_bound) == 2
+  def _get_observation(self):
+      obs = self.signal_features[(self._current_tick-self.window_size):self._current_tick]
+      obs = np.array(obs)
+      prices = obs[1:, 1]
+      changes = obs[:-1, 0]
+      opt = prices/changes
+      return opt
 
-        self.frame_bound = frame_bound
-        super().__init__(df, window_size)
+  def step(self, action):
+    self._done = False
+    self._current_tick += 1
 
-        self.trade_fee_bid_percent = 0.01  # unit
-        self.trade_fee_ask_percent = 0.005  # unit
+    if self._current_tick == self._end_tick:
+            self._done = True
 
+    step_reward = self._calculate_reward(action)
+    self._total_reward *= (1+step_reward)
 
-    def _process_data(self):
-        prices = self.df.loc[:, 'Close'].to_numpy()
+    self._update_profit(action)
 
-        prices[self.frame_bound[0] - self.window_size]  # validate index (TODO: Improve validation)
-        prices = prices[self.frame_bound[0]-self.window_size:self.frame_bound[1]]
-
-        diff = np.insert(np.diff(prices), 0, 0)
-        signal_features = np.column_stack((prices, diff))
-
-        return prices, signal_features
-
-
-    def _calculate_reward(self, action):
-        step_reward = 0
-
-        trade = False
-        if ((action == Actions.Buy.value and self._position == Positions.Short) or
+    trade = False
+    if ((action == Actions.Buy.value and self._position == Positions.Short) or
             (action == Actions.Sell.value and self._position == Positions.Long)):
             trade = True
+    if trade:
+        self._position = self._position.opposite()
+        self._last_trade_tick = self._current_tick
 
-        if trade:
-            current_price = self.prices[self._current_tick]
-            last_trade_price = self.prices[self._last_trade_tick]
-            price_diff = current_price - last_trade_price
+    self._position_history.append(self._position)
+    observation = self._get_observation()
+    info = dict(
+            total_reward = self._total_reward,
+            total_profit = self._total_profit,
+            position = self._position.value
+    )
+    self._update_history(info)
 
-            if self._position == Positions.Long:
-                step_reward += price_diff
-
-        return step_reward
-
-
-    def _update_profit(self, action):
-        trade = False
-        if ((action == Actions.Buy.value and self._position == Positions.Short) or
-            (action == Actions.Sell.value and self._position == Positions.Long)):
-            trade = True
-
-        if trade or self._done:
-            current_price = self.prices[self._current_tick]
-            last_trade_price = self.prices[self._last_trade_tick]
-
-            if self._position == Positions.Long:
-                shares = (self._total_profit * (1 - self.trade_fee_ask_percent)) / last_trade_price
-                self._total_profit = (shares * (1 - self.trade_fee_bid_percent)) * current_price
-
-
-    def max_possible_profit(self):
-        current_tick = self._start_tick
-        last_trade_tick = current_tick - 1
-        profit = 1.
-
-        while current_tick <= self._end_tick:
-            position = None
-            if self.prices[current_tick] < self.prices[current_tick - 1]:
-                while (current_tick <= self._end_tick and
-                       self.prices[current_tick] < self.prices[current_tick - 1]):
-                    current_tick += 1
-                position = Positions.Short
-            else:
-                while (current_tick <= self._end_tick and
-                       self.prices[current_tick] >= self.prices[current_tick - 1]):
-                    current_tick += 1
-                position = Positions.Long
-
-            if position == Positions.Long:
-                current_price = self.prices[current_tick - 1]
-                last_trade_price = self.prices[last_trade_tick]
-                shares = profit / last_trade_price
-                profit = shares * current_price
-            last_trade_tick = current_tick - 1
-
-        return profit
+    return observation, step_reward, self._done, info
+    
+  def _calculate_reward(self, action):
+        
+        current_price = self.prices[self._current_tick]
+        last_price = self.prices[self._current_tick-1]
+    
+        percent_diff = (current_price-last_price)/last_price
+        
+        if self._position == Positions.Short:
+            return float(-percent_diff)
+        else:
+            return float(percent_diff)
+            
+        
